@@ -1,82 +1,65 @@
-from flask import Flask, jsonify, request
-from flask_mail import Mail, Message
-import secrets
-from flask_pymongo import PyMongo
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 465
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = 'your_email@gmail.com'
-app.config['MAIL_PASSWORD'] = 'your_password'
-app.config['MONGO_URI'] = 'mongodb://localhost:27017/ticket_db'
+tickets = [
+    {"ticketId": 1, "eventId": 1, "price": 50, "type":"normal"},
+    {"ticketId": 2, "eventId": 1, "price": 100, "type":"VIP"},
+    {"ticketId": 3, "eventId": 2, "price": 10, "type":"normal"},
+    {"ticketId": 4, "eventId": 2, "price": 20, "type":"VIP"}, 
+    {"ticketId": 5, "eventId": 3, "price": 10, "type":"normal"},
+    {"ticketId": 6, "eventId": 3, "price": 20, "type":"VIP"}, 
+]
 
-mongo = PyMongo(app)
+booked_tickets = []
 
 @app.route("/ticket", methods=["POST"])
 def book_ticket():
-    ticket_data = request.get_json()
-    ticket_id = mongo.db.tickets.insert_one(ticket_data).inserted_id
-    return jsonify(str(ticket_id))
+    ticket_data = request.get_json()  
+    for ticket in tickets:
+        if ticket["ticketId"] == ticket_data["ticketId"]:
+            if any(t["ticketId"] == ticket_data["ticketId"] and t["userId"] == ticket_data["userId"] for t in booked_tickets):
+                # Ticket is already booked by the specified user
+                return jsonify({"message": "Ticket is already booked by specified user"}), 400
+            else:
+                booked_tickets.append({"ticketId": ticket["ticketId"], "userId": ticket_data["userId"], "eventId": ticket["eventId"]})
+                return jsonify({"message": "Ticket booked"})
+    return jsonify({"message": "Ticket not available"}), 400
 
-@app.route("/ticket/<ticket_id>", methods=["GET"])
-def get_ticket(ticket_id):
-    ticket = mongo.db.tickets.find_one({"ticketId": ticket_id})
-    if ticket:
-        return jsonify(ticket)
-    else:
-        return jsonify({"message": "Ticket not found"}), 404
-
-@app.route("/tickets", methods=["GET"])
-def get_tickets():
-    user_id = request.args.get("userId")
-    tickets = mongo.db.tickets.find({"userId": user_id})
-    return jsonify([ticket for ticket in tickets])
 
 @app.route("/ticket/<ticket_id>", methods=["PUT"])
 def unbook_ticket(ticket_id):
-    result = mongo.db.tickets.update_one({"ticketId": ticket_id}, {"$set": {"userId": None}})
-    if result.modified_count == 1:
-        return jsonify({"message": "Ticket unbooked"})
-    else:
-        return jsonify({"message": "Ticket not found"}), 404
+    for ticket in booked_tickets:
+        if ticket["ticketId"] == int(ticket_id):
+            booked_tickets.remove(ticket)
+            return jsonify({"message": "Ticket unbooked"})
+    return jsonify({"message": "Ticket not found"}), 404
 
-@app.route('/ticket/<ticket_id>/sell', methods=['POST'])
-def sell_ticket(ticket_id):
-    
-    seller_email = request.form.get('seller_email')
+@app.route("/ticket/<ticket_id>", methods=["GET"])
+def get_ticket(ticket_id):
+    user_id = 1
+    for ticket in booked_tickets:
+        if ticket["ticketId"] == int(ticket_id):
+            return jsonify(ticket)
+    return jsonify({"message": "Ticket not found"}), 404
 
-    secret_token = secrets.token_urlsafe(32)
+@app.route("/tickets", methods=["GET"])
+def get_tickets():
+    #user_id = request.args.get("userId")
+    user_id = 1
+    user_tickets = []
+    for ticket in booked_tickets:
+        if ticket["userId"] == user_id:
+            user_tickets.append(ticket)
+    return jsonify(user_tickets)
 
-    mongo.db.secret_tokens.insert_one({'ticketId': ticket_id, 'token': secret_token})
-
-    sell_url = url_for('complete_sale', ticket_id=ticket_id, secret_token=secret_token, _external=True)
-
-    message = Message(subject='Ticket sold',
-                      recipients=[seller_email],
-                      body='Your ticket has been sold. Click here to complete the sale: {}'.format(sell_url))
-    mail.send(message)
-
-    return jsonify({'success': True})
-
-@app.route('/ticket/<ticket_id>/complete_sale/<secret_token>', methods=['GET'])
-def complete_sale(ticket_id, secret_token):
-    
-    token_doc = mongo.db.secret_tokens.find_one({'ticketId': ticket_id, 'token': secret_token})
-    if not token_doc:
-        return 'Invalid or expired token'
-
-    mongo.db.secret_tokens.delete_one({'ticketId': ticket_id, 'token': secret_token})
-
-    result = mongo.db.tickets.update_one({'ticketId': ticket_id}, {'$set': {'userId': token_doc['buyerId']}})
-
-    if result.modified_count == 1:
-        return 'Ticket sale completed'
-    else:
-        return 'Failed to update ticket'
+@app.route("/event/<event_id>/tickets", methods=["GET"])
+def get_event_tickets(event_id):
+    event_tickets = []
+    for ticket in tickets:
+        if ticket["eventId"] == int(event_id):
+            event_tickets.append(ticket)
+    return jsonify(event_tickets)
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-

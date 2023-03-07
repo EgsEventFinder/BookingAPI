@@ -1,0 +1,4 @@
+mysql_host: 'localhost'
+mysql_user: 'fastmiguel099'
+mysql_password: '12345'
+mysql_db: 'tickets'
