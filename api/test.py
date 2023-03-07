@@ -3,12 +3,12 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 tickets = [
-    {"ticketId": 1, "eventId": 1, "price": 50, "type":"normal"},
-    {"ticketId": 2, "eventId": 1, "price": 100, "type":"VIP"},
-    {"ticketId": 3, "eventId": 2, "price": 10, "type":"normal"},
-    {"ticketId": 4, "eventId": 2, "price": 20, "type":"VIP"}, 
-    {"ticketId": 5, "eventId": 3, "price": 10, "type":"normal"},
-    {"ticketId": 6, "eventId": 3, "price": 20, "type":"VIP"}, 
+    {"ticketId": 1, "eventId": 1, "price": 50, "type": "normal", "booked": False},
+    {"ticketId": 2, "eventId": 1, "price": 100, "type": "VIP", "booked": False},
+    {"ticketId": 3, "eventId": 2, "price": 10, "type": "normal", "booked": False},
+    {"ticketId": 4, "eventId": 2, "price": 20, "type": "VIP", "booked": False},
+    {"ticketId": 5, "eventId": 3, "price": 10, "type": "normal", "booked": False},
+    {"ticketId": 6, "eventId": 3, "price": 20, "type": "VIP", "booked": False},
 ]
 
 booked_tickets = []
@@ -22,15 +22,19 @@ def book_ticket():
                 # Ticket is already booked by the specified user
                 return jsonify({"message": "Ticket is already booked by specified user"}), 400
             else:
+                ticket["booked"] = True
                 booked_tickets.append({"ticketId": ticket["ticketId"], "userId": ticket_data["userId"], "eventId": ticket["eventId"]})
                 return jsonify({"message": "Ticket booked"})
     return jsonify({"message": "Ticket not available"}), 400
-
 
 @app.route("/ticket/<ticket_id>", methods=["PUT"])
 def unbook_ticket(ticket_id):
     for ticket in booked_tickets:
         if ticket["ticketId"] == int(ticket_id):
+            for t in tickets:
+                if t["ticketId"] == int(ticket_id):
+                    t["booked"] = False
+                    break
             booked_tickets.remove(ticket)
             return jsonify({"message": "Ticket unbooked"})
     return jsonify({"message": "Ticket not found"}), 404
@@ -57,7 +61,7 @@ def get_tickets():
 def get_event_tickets(event_id):
     event_tickets = []
     for ticket in tickets:
-        if ticket["eventId"] == int(event_id):
+        if ticket["eventId"] == int(event_id) and not ticket["booked"]:
             event_tickets.append(ticket)
     return jsonify(event_tickets)
 

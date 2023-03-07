@@ -91,6 +91,14 @@ def get_tickets():
 
     return jsonify(user_tickets)
 
+@app.route("/event/<event_id>/tickets", methods=["GET"])
+def get_event_tickets(event_id):
+    
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT * FROM ticket WHERE eventId=%s", (event_id))
+    event_tickets = cur.fetchall()
+    return jsonify(event_tickets)
+
 '''
 @app.route("/tickets/<event_id>", methods=["GET"])
 def get_event_tickets(event_id):
