@@ -13,24 +13,104 @@ app.config['MYSQL_DB'] = db['mysql_db']
 
 mysql = MySQL(app)
  
-@app.route("/ticket", methods=["POST"])
-def book_ticket():
-    ticket_data = request.get_json()
-    id = ticket_data["id"]
-    user_id = ticket_data["userId"]
+def create_databases():
     
     with mysql.connection.cursor() as cur:
         try:
-            cur.execute("SELECT * FROM tickets WHERE id=%s AND booked=False", (id,))
+            query = """CREATE TABLE IF NOT EXISTS tickets (
+                    ticket_id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_number INT,
+                    event_id INT,
+                    price DECIMAL(10,2),
+                    type VARCHAR(50) CHECK (type IN ('VIP', 'normal')),
+                    booked BOOL,
+                    UNIQUE (ticket_number, event_id)
+                );
+                """
+            cur.execute(query)
+        
+            query = """CREATE TABLE IF NOT EXISTS booked_tickets (
+                    booking_id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_id INT,
+                    user_id INT,
+                    booking_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id),
+                    UNIQUE (ticket_id)
+                );
+                """
+            cur.execute(query)
+            mysql.connection.commit()
+    
+        except:
+            mysql.connection.rollback()
+            return jsonify({"message": "Error creating tables"}), 500
+
+        finally:
+            cur.close()
+
+@app.route("/", methods=["GET"])
+def create_tickets():
+    
+    create_databases()
+    num_events = 3
+    num_tickets = 50
+
+    with mysql.connection.cursor() as cur:
+        try:
+            for event_id in range(1, 4):
+                
+                query = "SELECT MAX(ticket_number) FROM tickets WHERE event_id = %s"
+                
+                cur.execute(query, (event_id,))
+                result = cur.fetchone()
+                
+                max_ticket_number = result[0] if result[0] else 0
+                
+                for i in range(1, 26):
+                    ticket_number = max_ticket_number + i
+                    query = "INSERT INTO tickets (ticket_number, event_id, price, type, booked) VALUES (%s, %s, %s, %s, %s)"
+                    cur.execute(query, (ticket_number, event_id, 10.00, 'normal', 0))
+                
+                for i in range(1, 26):
+                    ticket_number = max_ticket_number + i + 25
+                    query = "INSERT INTO tickets (ticket_number, event_id, price, type, booked) VALUES (%s, %s, %s, %s, %s)"
+                    cur.execute(query, (ticket_number, event_id, 50.00, 'VIP', 0))
+
+            mysql.connection.commit()
+            return jsonify({"message": "Tickets created"})
+
+        except:
+            mysql.connection.rollback()
+            return jsonify({"message": "Error creating tickets"}), 500
+
+        finally:
+            cur.close()
+
+
+@app.route("/ticket", methods=["POST"])
+def book_ticket():
+
+    booking_data = request.get_json()
+    user_id = booking_data["user_id"]
+    event_id = booking_data["event_id"]
+    ticket_type = booking_data["ticket_type"]
+
+    with mysql.connection.cursor() as cur:
+        try:
+            
+            cur.execute("SELECT ticket_id FROM tickets WHERE event_id = %s AND booked = %s AND type = %s ORDER BY ticket_number LIMIT 1", (event_id, 0, ticket_type))
             ticket = cur.fetchone()
+            ticket_id = ticket[0]
 
             if ticket is None:
-                return jsonify({"message": "Ticket not available or already booked"}), 400
+                # No available tickets for the event
+                return None
             
+            # Book the selected ticket for the user
+            cur.execute("UPDATE tickets SET booked = %s WHERE ticket_id = %s", (1,ticket_id,))
             booking_date = datetime.date.today()
-            cur.execute("INSERT INTO booked_tickets (id, bookingDate, userId) VALUES (%s, %s, %s)", (id, booking_date, user_id))
+            cur.execute("INSERT INTO booked_tickets (ticket_id, user_id, booking_date) VALUES (%s, %s, %s)", (ticket_id, user_id, booking_date))
 
-            cur.execute("UPDATE tickets SET booked=True WHERE id=%s", (id,))
             mysql.connection.commit()
 
             return jsonify({"message": "Ticket booked"})
@@ -42,19 +122,19 @@ def book_ticket():
         finally:
             cur.close()
 
-@app.route("/ticket/<id>", methods=["PUT"])
-def unbook_ticket(id):
+@app.route("/ticket/<ticket_id>", methods=["PUT"])
+def unbook_ticket(ticket_id):
     with mysql.connection.cursor() as cur:
         try:
-            cur.execute("SELECT * FROM booked_tickets WHERE id=%s", (id,))
+            cur.execute("SELECT * FROM booked_tickets WHERE ticket_id=%s", (ticket_id,))
             booking = cur.fetchone()
-
+          
             if booking is None:
                 return jsonify({"message": "Ticket not found"}), 404
 
-            cur.execute("DELETE FROM booked_tickets WHERE id=%s", (id,))
-
-            cur.execute("UPDATE tickets SET booked=False WHERE id=%s", (id,))
+            cur.execute("DELETE FROM booked_tickets WHERE ticket_id=%s", (ticket_id,))
+    
+            cur.execute("UPDATE tickets SET booked=%s WHERE ticket_id=%s", (0,ticket_id,))
             mysql.connection.commit()
 
             return jsonify({"message": "Ticket unbooked"})
@@ -66,19 +146,24 @@ def unbook_ticket(id):
         finally:
             cur.close()
 
-@app.route("/ticket/<id>", methods=["GET"])
-def get_ticket(id):
+@app.route("/ticket/<ticket_id>", methods=["GET"])
+def get_ticket(ticket_id):
     user_id = 1
-    
+
     with mysql.connection.cursor() as cur:
         try:
             query = """
-                SELECT b.bookingDate, t.price, t.eventId, t.type FROM booked_tickets as b 
-                    INNER JOIN tickets as t ON b.id = t.id WHERE b.id = %s AND b.userId = %s
+                SELECT b.booking_date, t.price, t.event_id, t.type FROM booked_tickets as b 
+                    INNER JOIN tickets as t ON b.ticket_id = t.ticket_id WHERE b.ticket_id = %s AND b.user_id = %s
             """
-            cur.execute(query,(id,user_id,))
-            booking = cur.fetchone()
-
+            cur.execute(query,(ticket_id,user_id,))
+            ticket = cur.fetchone()
+            user_ticket = {
+                "event_id": ticket[0],
+                "price": ticket[1],
+                "type": ticket[2],
+                "booking_date": ticket[3].strftime("%Y-%m-%d")
+            }
             if booking is None:
                 return jsonify({"message": "Ticket not found"}), 404
 
@@ -94,20 +179,27 @@ def get_ticket(id):
 def get_tickets():
     user_id = 1
     
-    page = int(request.args.get("page", 1))
-    limit = int(request.args.get("limit", 10))
-    offset = (page - 1) * limit
+    #page = int(request.args.get("page", 1))
+    #limit = int(request.args.get("limit", 10))
+    #offset = (page - 1) * limit
     
     with mysql.connection.cursor() as cur:
         try:
-            query = """
-                SELECT b.bookingDate, t.price, t.eventId, t.type FROM booked_tickets as b 
-                INNER JOIN tickets as t ON b.id = t.id WHERE b.userId = %s LIMIT %s, %s"
-            """
-            cur.execute(query,(user,offset,limit,))
+            
+            cur.execute("SELECT t.event_id, t.price, t.type, b.booking_date FROM booked_tickets AS b INNER JOIN tickets AS t ON t.ticket_id = b.ticket_id WHERE b.user_id = %s", (user_id,))
             user_tickets = cur.fetchall()
 
-            return jsonify(user_tickets)
+            user_tickets_list = []
+            for ticket in user_tickets:
+                user_ticket = {
+                    "event_id": ticket[0],
+                    "price": ticket[1],
+                    "type": ticket[2],
+                    "booking_date": ticket[3].strftime("%Y-%m-%d")
+                }
+                user_tickets_list.append(user_ticket)
+
+            return jsonify(user_tickets_list)
 
         except:
             return jsonify({"message": "Error getting user tickets"}), 500
@@ -119,7 +211,7 @@ def get_tickets():
 def get_event_tickets(event_id):
     with mysql.connection.cursor() as cur:
         try:
-            cur.execute("SELECT * FROM tickets WHERE eventId=%s and booked=False", (event_id,))
+            cur.execute("SELECT * FROM tickets WHERE event_id=%s and booked=%s", (event_id,0))
             event_tickets = cur.fetchall()
 
             return jsonify(event_tickets)
@@ -137,10 +229,10 @@ def get_number_event_tickets(event_id):
         try:
             query = """
                 SELECT COUNT(*) AS num_booked_tickets FROM tickets 
-                    INNER JOIN booked_tickets ON tickets.id = booked_tickets.id 
-                        WHERE tickets.eventId = %s AND tickets.booked = True
+                    INNER JOIN booked_tickets ON tickets.ticket_id = booked_tickets.ticket_id 
+                        WHERE tickets.event_id = %s AND tickets.booked = %s
             """
-            cur.execute(query,(event_id))
+            cur.execute(query,(event_id,1))
             result = cur.fetchone()
             count = result[0]
 
