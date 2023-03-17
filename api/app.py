@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_mysqldb import MySQL
 import yaml
 import datetime
+import random
 
 app = Flask(__name__)
 
@@ -21,7 +22,7 @@ def create_databases():
                     ticket_id INT AUTO_INCREMENT PRIMARY KEY,
                     ticket_number INT,
                     event_id INT,
-                    price DECIMAL(10,2),
+                    price INT,
                     type VARCHAR(50) CHECK (type IN ('VIP', 'normal')),
                     booked BOOL,
                     UNIQUE (ticket_number, event_id)
@@ -53,7 +54,7 @@ def create_tickets():
     
     create_databases()
     num_events = 3
-    num_tickets = 50
+    num_tickets = 20
 
     with mysql.connection.cursor() as cur:
         try:
@@ -66,15 +67,19 @@ def create_tickets():
                 
                 max_ticket_number = result[0] if result[0] else 0
                 
-                for i in range(1, 26):
+                for i in range(1, 11):
                     ticket_number = max_ticket_number + i
+                    #price = random.randint(10, 40)
+                    price = 10 
                     query = "INSERT INTO tickets (ticket_number, event_id, price, type, booked) VALUES (%s, %s, %s, %s, %s)"
-                    cur.execute(query, (ticket_number, event_id, 10.00, 'normal', 0))
+                    cur.execute(query, (ticket_number, event_id, price, 'normal', 0))
                 
-                for i in range(1, 26):
-                    ticket_number = max_ticket_number + i + 25
+                for i in range(1, 11):
+                    ticket_number = max_ticket_number + i + 10
+                    #price = random.randint(60, 100)
+                    price = 50 
                     query = "INSERT INTO tickets (ticket_number, event_id, price, type, booked) VALUES (%s, %s, %s, %s, %s)"
-                    cur.execute(query, (ticket_number, event_id, 50.00, 'VIP', 0))
+                    cur.execute(query, (ticket_number, event_id, price, 'VIP', 0))
 
             mysql.connection.commit()
             return jsonify({"message": "Tickets created"})
@@ -103,12 +108,10 @@ def book_ticket():
             ticket_id = ticket[0]
 
             if ticket is None:
-                # No available tickets for the event
                 return None
             
-            # Book the selected ticket for the user
             cur.execute("UPDATE tickets SET booked = %s WHERE ticket_id = %s", (1,ticket_id,))
-            booking_date = datetime.date.today()
+            booking_date = datetime.datetime.now()
             cur.execute("INSERT INTO booked_tickets (ticket_id, user_id, booking_date) VALUES (%s, %s, %s)", (ticket_id, user_id, booking_date))
 
             mysql.connection.commit()
@@ -153,21 +156,24 @@ def get_ticket(ticket_id):
     with mysql.connection.cursor() as cur:
         try:
             query = """
-                SELECT b.booking_date, t.price, t.event_id, t.type FROM booked_tickets as b 
+                SELECT t.event_id, t.price, t.type, b.booking_date FROM booked_tickets as b 
                     INNER JOIN tickets as t ON b.ticket_id = t.ticket_id WHERE b.ticket_id = %s AND b.user_id = %s
             """
             cur.execute(query,(ticket_id,user_id,))
             ticket = cur.fetchone()
-            user_ticket = {
-                "event_id": ticket[0],
-                "price": ticket[1],
-                "type": ticket[2],
-                "booking_date": ticket[3].strftime("%Y-%m-%d")
-            }
-            if booking is None:
+            
+            if ticket is None:
                 return jsonify({"message": "Ticket not found"}), 404
 
-            return jsonify(booking)
+            event_id, price, ticket_type, booking_date = ticket
+            user_ticket = {
+                "event_id": event_id,
+                "price": price,
+                "type": ticket_type,
+                "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
+            }
+
+            return jsonify(user_ticket)
 
         except:
             return jsonify({"message": "Error getting ticket"}), 500
@@ -179,23 +185,31 @@ def get_ticket(ticket_id):
 def get_tickets():
     user_id = 1
     
-    #page = int(request.args.get("page", 1))
-    #limit = int(request.args.get("limit", 10))
-    #offset = (page - 1) * limit
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 10))
+    offset = (page - 1) * limit
     
     with mysql.connection.cursor() as cur:
         try:
-            
-            cur.execute("SELECT t.event_id, t.price, t.type, b.booking_date FROM booked_tickets AS b INNER JOIN tickets AS t ON t.ticket_id = b.ticket_id WHERE b.user_id = %s", (user_id,))
+            query = """
+                SELECT t.event_id, t.price, t.type, b.booking_date 
+                FROM booked_tickets AS b 
+                INNER JOIN tickets AS t ON t.ticket_id = b.ticket_id 
+                WHERE b.user_id = %s 
+                ORDER BY b.booking_date DESC 
+                LIMIT %s,%s
+            """
+            cur.execute(query, (user_id, offset, limit))
             user_tickets = cur.fetchall()
 
             user_tickets_list = []
             for ticket in user_tickets:
+                event_id, price, ticket_type, booking_date = ticket
                 user_ticket = {
-                    "event_id": ticket[0],
-                    "price": ticket[1],
-                    "type": ticket[2],
-                    "booking_date": ticket[3].strftime("%Y-%m-%d")
+                    "event_id": event_id,
+                    "price": price,
+                    "type": ticket_type,
+                    "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
                 }
                 user_tickets_list.append(user_ticket)
 
@@ -209,12 +223,34 @@ def get_tickets():
 
 @app.route("/event/<event_id>/tickets", methods=["GET"])
 def get_event_tickets(event_id):
+
+    
     with mysql.connection.cursor() as cur:
         try:
-            cur.execute("SELECT * FROM tickets WHERE event_id=%s and booked=%s", (event_id,0))
+            cur.execute(
+                "SELECT type, price FROM tickets WHERE event_id=%s AND booked=%s GROUP BY type, price",
+                (event_id, 0)
+            )
             event_tickets = cur.fetchall()
 
-            return jsonify(event_tickets)
+            ticket_info = []
+            for ticket_type, ticket_price in event_tickets:
+                if any(ticket["type"] == ticket_type for ticket in ticket_info):
+                    [ticket["prices"].append(ticket_price) for ticket in ticket_info if ticket["type"] == ticket_type]
+                else:
+                    ticket_info.append({
+                        "type": ticket_type,
+                        "event_id": event_id,
+                        "prices": [ticket_price]
+                    })
+
+            ticket_info = [{    
+                "type": ticket["type"],
+                "event_id": ticket["event_id"],
+                "prices": ticket["prices"][0] if len(ticket["prices"]) == 1 else ticket["prices"]
+            } for ticket in ticket_info]
+
+            return jsonify(ticket_info)
 
         except:
             return jsonify({"message": "Error getting event tickets"}), 500
@@ -227,12 +263,7 @@ def get_event_tickets(event_id):
 def get_number_event_tickets(event_id):
     with mysql.connection.cursor() as cur:
         try:
-            query = """
-                SELECT COUNT(*) AS num_booked_tickets FROM tickets 
-                    INNER JOIN booked_tickets ON tickets.ticket_id = booked_tickets.ticket_id 
-                        WHERE tickets.event_id = %s AND tickets.booked = %s
-            """
-            cur.execute(query,(event_id,1))
+            cur.execute("SELECT COUNT(*) FROM tickets WHERE event_id = %s AND booked = %s",(event_id,0))
             result = cur.fetchone()
             count = result[0]
 

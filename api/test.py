@@ -116,62 +116,56 @@ def get_tickets():
                 user_tickets.append(user_ticket)
     return jsonify(user_tickets)
 
-@app.route("/event/<event_id>/tickets", methods=["GET"])
-def get_event_tickets(event_id):
-    event_tickets = []
-    for ticket in tickets:
-        if ticket["event_id"] == int(event_id) and not ticket["booked"]:
-            event_tickets.append(ticket)
-    return jsonify(event_tickets)
 
-
-# use the key in your sell_ticket function
-@app.route('/ticket/<ticket_id>/sell', methods=['GET'])
+@app.route('/ticket/<ticket_id>/trade', methods=['GET'])
 def sell_ticket(ticket_id):
+    seller_id = 1 # Replace with actual seller ID
     seller_email = "miguel.angelo.tavares@hotmail.com"
+    buyer_id = 2 # Replace with actual buyer ID
+    buyer_email = "buyer@example.com"
+    ticket = next((t for t in tickets if t['ticket_id'] == int(ticket_id)), None)
+    if not ticket:
+        return jsonify({'message': 'Ticket not found'}), 404
+
     if (key_expiration - datetime.now()) < timedelta(minutes=5):
         token_expiration = key_expiration
     else:
         token_expiration = datetime.now() + timedelta(minutes=5)
 
     payload = {
-        'ticket_id': ticket_id,
-        'exp': token_expiration,
+        'seller_id': seller_id,
+        #'seller_email': seller_email,
+        'buyer_id': buyer_id,
+        #'buyer_email': buyer_email,
     }
 
     secret_token = jwt.encode(payload, key , algorithm='HS256')
 
-    sell_url = url_for('complete_sale', ticket_id=ticket_id, secret_token=secret_token, _external=True)
+    sell_url = url_for('complete_trade', ticket_id=ticket_id, token=secret_token, _external=True)
 
     message = Message(subject='Ticket sold',
                       sender='eventFinderUA@outlook.com',
                       recipients=[seller_email],
-                      body=f'Your ticket has been sold. Click here to complete the sale: {sell_url}')
+                      body=f'Your {ticket["type"]} ticket (#{ticket["ticket_number"]}) for event #{ticket["event_id"]} has been sold to {buyer_email} for ${ticket["price"]} $. Click here to complete the sale: {sell_url}')
     mail.send(message)
 
     return jsonify({'success': True})
 
+
 # use the key in your complete_sale function
-@app.route('/ticket/<ticket_id>/complete_sale/<secret_token>', methods=['GET'])
-def complete_sale(ticket_id, secret_token):
+@app.route('/ticket/<ticket_id>/complete_trade/<token>', methods=['GET'])
+def complete_trade(ticket_id, token):
     try:
         if key is None:
              return jsonify({'message': 'Key not found'})
+
         decoded_token = jwt.decode(secret_token, key, algorithms=['HS256'])
-        
-        expiration_timestamp = decoded_token['exp']
-        current_timestamp = datetime.now().timestamp()
-        if current_timestamp >= expiration_timestamp:
-
-            raise Exception()
-
-        if decoded_token['ticket_id'] != ticket_id:
-            
-            raise Exception()
-
+      
+        sellerId = decoded_token['seller_id']
+        buyerId = decoded_token['buyer_id']
         for booked_ticket in booked_tickets:
-            if booked_ticket['ticket_id'] == int(ticket_id):
-                booked_ticket['user_id'] = 2
+            if booked_ticket['ticket_id'] == int(ticket_id) and booked_ticket['user_id'] == seller_id:
+                booked_ticket['user_id'] = buyer_id
                 break
 
         return jsonify({'message': 'Ticket sale completed'})
