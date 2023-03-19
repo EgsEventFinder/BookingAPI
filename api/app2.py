@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request, url_for
 from flask_mysqldb import MySQL
-from flask_mail import Mail, Message
 import yaml
 import datetime
 import jwt
@@ -9,20 +8,18 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
-db = yaml.load(open('db.yaml'), Loader=yaml.Loader)
+with open("db.yaml", "r") as stream:
+    try:
+        db = yaml.safe_load(stream)
+    except yaml.YAMLError as e:
+        print(e)
+
 app.config['MYSQL_HOST'] = db['mysql_host']
 app.config['MYSQL_USER'] = db['mysql_user']
 app.config['MYSQL_PASSWORD'] = db['mysql_password']
 app.config['MYSQL_DB'] = db['mysql_db']
-app.config['MAIL_SERVER'] = 'smtp-mail.outlook.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False
-app.config['MAIL_USERNAME'] = 'eventFinderUA@outlook.com'
-app.config['MAIL_PASSWORD'] = 'UaDETIegs'
 
 mysql = MySQL(app)
-mail = Mail(app)
 
 key = secrets.token_hex(32)
 key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
@@ -32,13 +29,12 @@ scheduler = BackgroundScheduler()
 @scheduler.scheduled_job('interval', minutes=15)
 def is_key_expired():
     global key, key_expiration
-    if datetime.datetime.now() >= key_expiration:
-       
+
+    if datetime.datetime.now() >= key_expiration:   
         key = secrets.token_hex(32)
         key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
         print('Key expired. New key generated.')
 
-# start the scheduler
 scheduler.start()
 
 def create_table():
@@ -58,12 +54,9 @@ def create_table():
             cur.execute(query)
             mysql.connection.commit()
     
-        except:
+        except Exception as e:
             mysql.connection.rollback()
-            return jsonify({"message": "Error creating table"}), 500
-
-        finally:
-            cur.close()
+            return jsonify({"message": f"Error creating ticket table: {e}"}), 500
 
 @app.route("/", methods =["GET"])
 def home():
@@ -75,95 +68,119 @@ def home():
 @app.route("/ticket", methods=["POST"])
 def book_ticket():
 
-    booking_data = request.get_json()
-    user_id = booking_data["user_id"]
-    event_id = booking_data["event_id"]
-    price = booking_data["price"]
-    ticket_type = booking_data["ticket_type"]
+    try:
+        
+        booking_data = request.get_json()
 
-    with mysql.connection.cursor() as cur:
-        try:
-            
-            booking_date = datetime.datetime.now()          
-          
-            cur.execute("INSERT INTO ticket(event_id,price,type,user_id,booking_date) VALUES (%s,%s,%s,%s,%s)", (event_id, price,ticket_type,user_id,booking_date))
+        required_fields = ["user_id", "event_id", "price", "ticket_type"]
+        for field in required_fields:
+            if field not in booking_data:
+                return jsonify({"message": f"{field} is missing"}), 400
+
+        user_id = booking_data["user_id"]
+        event_id = booking_data["event_id"]
+        price = booking_data["price"]
+        ticket_type = booking_data["ticket_type"]
+
+        with mysql.connection.cursor() as cur:
+        
+            booking_date = datetime.datetime.now()
+            query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
+            cur.execute(query, (event_id, price, ticket_type, user_id, booking_date))
             mysql.connection.commit()
 
-            return jsonify({"message": "Ticket booked"})
-
-        except:
-            mysql.connection.rollback()
-            return jsonify({"message": "Error booking ticket"}), 500
-
-        finally:
-            cur.close()
-
-@app.route("/ticket/<ticket_id>", methods=["DELETE"])
-def unbook_ticket(ticket_id):
-
-    user_id = 1
-    with mysql.connection.cursor() as cur:
-        try:
-            cur.execute("SELECT * FROM ticket WHERE ticket_id=%s AND user_id = %s", (ticket_id,user_id,))
-            booking = cur.fetchone()
-          
-            if booking is None:
-                return jsonify({"message": "Ticket not found"}), 404
-
-            cur.execute("DELETE FROM ticket WHERE ticket_id=%s", (ticket_id,))
-    
-            mysql.connection.commit()
-
-            return jsonify({"message": "Ticket unbooked"})
-
-        except:
-            mysql.connection.rollback()
-            return jsonify({"message": "Error unbooking ticket"}), 500
-
-        finally:
-            cur.close()
-
-@app.route("/ticket/<ticket_id>", methods=["GET"])
-def get_ticket(ticket_id):
-    user_id = 1
-
-    with mysql.connection.cursor() as cur:
-        try:
-            query = """
-                SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s
-            """
-            cur.execute(query,(ticket_id,user_id,))
-            ticket = cur.fetchone()
-            
-            if ticket is None:
-                return jsonify({"message": "Ticket not found"}), 404
-
-            event_id, price, ticket_type, booking_date = ticket
-            user_ticket = {
+            ticket_id = cur.lastrowid
+        
+            return jsonify({
+                "message": "Ticket booked",
+                "ticket_id": ticket_id,
+                "user_id": user_id,
                 "event_id": event_id,
                 "price": price,
                 "type": ticket_type,
                 "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
-            }
+            })
 
-            return jsonify(user_ticket)
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({"message": f"Error booking ticket: {e}"}), 500
 
-        except:
-            return jsonify({"message": "Error getting ticket"}), 500
+
+@app.route("/ticket/<ticket_id>", methods=["DELETE"])
+def unbook_ticket(ticket_id):
+    try:
+        booking_data = request.get_json()
+
+        if "user_id" not in booking_data:
+            return jsonify({"message": "User ID is missing"}), 400
+
+        user_id = booking_data["user_id"]
+
+        with mysql.connection.cursor() as cur:
+            query = "SELECT * FROM ticket WHERE ticket_id=%s AND user_id=%s"
+            cur.execute(query, (ticket_id, user_id))
+            booking = cur.fetchone()
+
+            if booking is None:
+                return jsonify({"message": "Ticket not found"}), 404
+
+            query = "DELETE FROM ticket WHERE ticket_id=%s"
+            cur.execute(query, (ticket_id,))
+            mysql.connection.commit()
+
+            return jsonify({"message": "Ticket unbooked"})
+
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
+
+@app.route("/ticket/<ticket_id>", methods=["GET"])
+def get_ticket(ticket_id):
+    
+    booking_data = request.get_json()
+
+    if "user_id" not in booking_data:
+        return jsonify({"message": "User ID is missing"}), 400
+
+    user_id = booking_data["user_id"]
+
+    with mysql.connection.cursor() as cur:
+        query = """
+            SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s LIMIT 1
+        """
+        cur.execute(query, (ticket_id, user_id))
+
+        ticket = cur.fetchone()
+
+        if ticket is None:
+            return jsonify({"message": "Ticket not found"}), 404
+
+        event_id, price, ticket_type, booking_date = ticket
+   
+        return jsonify({
+            "event_id": event_id,
+            "price": price,
+            "type": ticket_type,
+            "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
+        })
         
-        finally:
-            cur.close()
 
 @app.route("/ticket/user/tickets", methods=["GET"])
 def get_tickets():
-    user_id = 2
+
+    try:
+        booking_data = request.get_json()
+
+        if "user_id" not in booking_data:
+            return jsonify({"message": "User ID is missing"}), 400
+
+        user_id = booking_data.get("user_id")
     
-    page = int(request.args.get("page", 1))
-    limit = int(request.args.get("limit", 10))
-    offset = (page - 1) * limit
-    
-    with mysql.connection.cursor() as cur:
-        try:
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 10, type=int)
+
+        with mysql.connection.cursor() as cur:
+           
             query = """
                 SELECT event_id, price, type, booking_date 
                 FROM ticket
@@ -171,39 +188,53 @@ def get_tickets():
                 ORDER BY booking_date DESC 
                 LIMIT %s,%s
             """
-            cur.execute(query, (user_id, offset, limit))
+            cur.execute(query, (user_id, (page - 1) * limit, limit))
             user_tickets = cur.fetchall()
 
-            user_tickets_list = []
+            if not user_tickets:
+                return jsonify({"message": "No tickets found for this user ID."}), 404
+
+            formatted_tickets = []
             for ticket in user_tickets:
                 event_id, price, ticket_type, booking_date = ticket
-                user_ticket = {
+                formatted_ticket = {
                     "event_id": event_id,
                     "price": price,
                     "type": ticket_type,
                     "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
                 }
-                user_tickets_list.append(user_ticket)
+                formatted_tickets.append(formatted_ticket)
 
-            return jsonify(user_tickets_list)
+            return jsonify({
+                "tickets": formatted_tickets
+            })
 
-        except:
-            return jsonify({"message": "Error getting user tickets"}), 500
+    except ValueError:
+        return jsonify({"message": "Invalid page or limit parameter."}), 400
 
-        finally:
-            cur.close()
+    except Exception as e:
+        return jsonify({"message": f"Error getting user tickets: {e}"}), 500
 
 @app.route('/ticket/<ticket_id>/trade', methods=['GET'])
 def trade_ticket(ticket_id):
 
-    seller_id = 2
-    seller_email = "miguel.angelo.tavares@hotmail.com"
-    buyer_id = 1
-    buyer_email = "buyer@example.com"
+    try:
+        trade_data = request.get_json()
+        required_fields = ["seller_id", "seller_email", "buyer_id", "buyer_email"]
+        for field in required_fields:
+            if field not in trade_data:
+                return jsonify({"message": f"{field} is missing"}), 400
 
-    with mysql.connection.cursor() as cur:
-        try:
-            cur.execute("SELECT * FROM ticket WHERE ticket_id=%s AND user_id = %s", (ticket_id,seller_id,))
+        seller_id = trade_data["seller_id"]
+        seller_email = trade_data["seller_email"]
+        buyer_id = trade_data["buyer_id"]
+        buyer_email = trade_data["buyer_email"]
+ 
+        with mysql.connection.cursor() as cur:
+            query = """
+                SELECT event_id, price, type, booking_date  FROM ticket WHERE ticket_id=%s AND user_id = %s
+            """
+            cur.execute(query, (ticket_id,seller_id,))
             ticket = cur.fetchone()
             if ticket is None:
                 return jsonify({'message': 'Ticket not found'}), 404
@@ -224,61 +255,59 @@ def trade_ticket(ticket_id):
             token = jwt.encode(payload, key , algorithm='HS256')
       
             sell_url = url_for('complete_trade', ticket_id=ticket_id, token=token, _external=True)
-            message = Message(subject='Ticket sold',
-                            sender='eventFinderUA@outlook.com',
-                            recipients=[seller_email],
-                            body=f'Your ticket has been sold. Click here to complete the sale: {sell_url}')
-            mail.send(message)
-            
-            
-            return jsonify({'success': True})
+           
+            event_id, price, ticket_type, booking_date = ticket
+    
+            return jsonify({
+                "url": sell_url,
+                "ticket": {
+                    "event_id": event_id,
+                    "price": price,
+                    "type": ticket_type,
+                    "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
+                },
+                'seller_id': seller_id,
+                'seller_email': seller_email,
+                'buyer_id': buyer_id,
+                'buyer_email': buyer_email,
+            })
 
-        except:
-            return jsonify({"message": "Error trading the tickets"}), 500
-
-        finally:
-            cur.close()
+    except Exception as e:
+        return jsonify({"message": "Error trading the tickets: {e}"}), 500
 
 @app.route('/ticket/<ticket_id>/complete_trade/<token>', methods=['GET'])
 def complete_trade(ticket_id, token):
 
-    with mysql.connection.cursor() as cur:
-        try:
-            decoded_token = jwt.decode(token, key, algorithms=['HS256'])
-            expiration_timestamp = decoded_token['exp']
-            current_timestamp = datetime.datetime.now().timestamp()
-            if current_timestamp >= expiration_timestamp:
-                raise Exception("Token has expired")
+    try:
+        decoded_token = jwt.decode(token, key, algorithms=['HS256'])
+        expiration_timestamp = decoded_token.get('exp')
+        current_timestamp = datetime.datetime.now().timestamp()
 
-            seller_id = decoded_token['seller_id']
-            buyer_id = decoded_token['buyer_id']
-            cur.execute("UPDATE ticket SET user_id=%s WHERE ticket_id=%s AND user_id = %s", (buyer_id,ticket_id,seller_id))
+        if current_timestamp >= expiration_timestamp:
+            raise jwt.ExpiredSignatureError('Token has expired')
+
+        seller_id = decoded_token.get('seller_id')
+        buyer_id = decoded_token.get('buyer_id')
+
+        with mysql.connection.cursor() as cur:
+            query = """
+                UPDATE ticket SET user_id=%s WHERE ticket_id=%s AND user_id=%s
+            """
+            cur.execute(query,(buyer_id, ticket_id, seller_id))
             mysql.connection.commit()
-    
-            return jsonify({'message': 'Ticket sale completed'})
 
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token has expired'}), 401
-        except:
-            return jsonify({'message': 'Invalid token'}), 401
+        return jsonify({'message': 'Ticket sale completed'})
 
-'''
-@app.route("/tickets/<event_id>", methods=["GET"])
-def get_number_event_tickets(event_id):
-    with mysql.connection.cursor() as cur:
-        try:
-            cur.execute("SELECT COUNT(*) FROM ticket WHERE event_id = %s",(event_id))
-            result = cur.fetchone()
-            count = result[0]
+    except jwt.ExpiredSignatureError:
+        return jsonify({'message': 'Token has expired. Please generate a new one.'}), 401
 
-            return jsonify({"Number of booked tickets": count})
+    except jwt.exceptions.DecodeError:
+        return jsonify({'message': 'Invalid token format. Please provide a valid token.'}), 401
 
-        except:
-            return jsonify({"message": "Error getting event tickets"}), 500
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({'message': f'Error completing the ticket sale: {e}'}), 500
 
-        finally:
-            cur.close()
-'''
 if __name__ == '__main__':
     app.run(debug=True)
 
