@@ -44,7 +44,7 @@ def create_table():
         
             query = """CREATE TABLE IF NOT EXISTS ticket (
                     ticket_id INT AUTO_INCREMENT PRIMARY KEY,                   
-                    event_id INT NOT NULL,
+                    event_id VARCHAR(50) NOT NULL,
                     price INT NOT NULL,
                     type VARCHAR(50) NOT NULL,
                     user_id INT NOT NULL,
@@ -58,12 +58,10 @@ def create_table():
             mysql.connection.rollback()
             return jsonify({"message": f"Error creating ticket table: {e}"}), 500
 
-@app.route("/", methods =["GET"])
-def home():
+@app.before_first_request
+def setup():
     create_table()
     is_key_expired()
-
-    return jsonify({"message": "Table created"}),200
 
 @app.route("/ticket", methods=["POST"])
 def book_ticket():
