@@ -69,7 +69,6 @@ def book_ticket():
     try:
         
         booking_data = request.get_json()
-
         required_fields = ["user_id", "event_id", "price", "ticket_type"]
         for field in required_fields:
             if field not in booking_data:
@@ -135,12 +134,7 @@ def unbook_ticket(ticket_id):
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def get_ticket(ticket_id):
     
-    booking_data = request.get_json()
-
-    if "user_id" not in booking_data:
-        return jsonify({"message": "User ID is missing"}), 400
-
-    user_id = booking_data["user_id"]
+    user_id = request.args.get("user_id")
 
     with mysql.connection.cursor() as cur:
         query = """
@@ -167,13 +161,7 @@ def get_ticket(ticket_id):
 def get_tickets():
 
     try:
-        booking_data = request.get_json()
-
-        if "user_id" not in booking_data:
-            return jsonify({"message": "User ID is missing"}), 400
-
-        user_id = booking_data.get("user_id")
-    
+        user_id = request.args.get("user_id", type=int)
         page = request.args.get("page", 1, type=int)
         limit = request.args.get("limit", 10, type=int)
 
@@ -208,7 +196,7 @@ def get_tickets():
             })
 
     except ValueError:
-        return jsonify({"message": "Invalid page or limit parameter."}), 400
+        return jsonify({"message": "Invalid query parameter."}), 400
 
     except Exception as e:
         return jsonify({"message": f"Error getting user tickets: {e}"}), 500
@@ -217,16 +205,10 @@ def get_tickets():
 def trade_ticket(ticket_id):
 
     try:
-        trade_data = request.get_json()
-        required_fields = ["seller_id", "seller_email", "buyer_id", "buyer_email"]
-        for field in required_fields:
-            if field not in trade_data:
-                return jsonify({"message": f"{field} is missing"}), 400
-
-        seller_id = trade_data["seller_id"]
-        seller_email = trade_data["seller_email"]
-        buyer_id = trade_data["buyer_id"]
-        buyer_email = trade_data["buyer_email"]
+        seller_id = request.args.get("seller_id", type=int)
+        seller_email = request.args.get("seller_email", type=str)
+        buyer_id = request.args.get("buyer_id", type=int)
+        buyer_email = request.args.get("buyer_email", type=str)
  
         with mysql.connection.cursor() as cur:
             query = """
@@ -269,7 +251,9 @@ def trade_ticket(ticket_id):
                 'buyer_id': buyer_id,
                 'buyer_email': buyer_email,
             })
-
+        
+    except ValueError:
+        return jsonify({"message": "Invalid query parameter."}), 400
     except Exception as e:
         return jsonify({"message": "Error trading the tickets: {e}"}), 500
 
@@ -308,4 +292,3 @@ def complete_trade(ticket_id, token):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
