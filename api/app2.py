@@ -168,7 +168,7 @@ def get_tickets():
         with mysql.connection.cursor() as cur:
            
             query = """
-                SELECT event_id, price, type, booking_date 
+                SELECT ticket_id,event_id, price, type, booking_date 
                 FROM ticket
                 WHERE user_id = %s 
                 ORDER BY booking_date DESC 
@@ -182,8 +182,9 @@ def get_tickets():
 
             formatted_tickets = []
             for ticket in user_tickets:
-                event_id, price, ticket_type, booking_date = ticket
+                ticket_id, event_id, price, ticket_type, booking_date = ticket
                 formatted_ticket = {
+                    "ticket_id": ticket_id,
                     "event_id": event_id,
                     "price": price,
                     "type": ticket_type,
