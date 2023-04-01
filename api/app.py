@@ -42,7 +42,7 @@ def book_ticket():
     try:
         booking_data = request.get_json()
         print(booking_data)
-        required_fields = ["user_id", "event_id", "price", "ticket_type"]
+        required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
                 return jsonify({"message": f"{field} is missing"}), 400
@@ -51,7 +51,7 @@ def book_ticket():
         event_id = booking_data["event_id"]
         ticket_price = booking_data["price"]
         ticket_type = booking_data["ticket_type"]
-        event_name = "Concerto Quim Barreiros"
+        event_name = booking_data["event_name"]
 
         session = create_session(event_name, ticket_type, event_id,ticket_price,user_id)
         
@@ -83,20 +83,20 @@ def success():
         user_id = session.metadata.get("user_id")
         booking_date = datetime.datetime.now()
 
-        with mysql.connection.cursor() as cur:
-            query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
-            cur.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
-            mysql.connection.commit()
-
-            ticket_id = cur.lastrowid
-            
-            query = """INSERT INTO transactions (event_id, user_id, ticket_id, payment_intent) 
-                        VALUES (%s,%s,%s,%s);
-                    """
-            cur.execute(query, (event_id, user_id, ticket_id, payment_intent.id,))
-            mysql.connection.commit()
         if payment_intent.status == "succeeded":    
-           
+            with mysql.connection.cursor() as cur:
+                query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
+                cur.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
+                mysql.connection.commit()
+
+                ticket_id = cur.lastrowid
+                
+                query = """INSERT INTO transactions (event_id, user_id, ticket_id, payment_intent) 
+                            VALUES (%s,%s,%s,%s);
+                        """
+                cur.execute(query, (event_id, user_id, ticket_id, payment_intent.id,))
+                mysql.connection.commit()
+
             return jsonify({
                 "message": "Ticket booked",
                 "ticket_id": ticket_id,
@@ -106,6 +106,7 @@ def success():
                 "type": ticket_type,
                 "booking_date": format_date(booking_date)
             }),200
+        
         else:
             return jsonify({
                 "message": "Payment failed.",
@@ -363,7 +364,7 @@ def get_product(event_name):
 
     return product_id
     
-def get_ticketType_price(event_name, ticket_type):
+def get_ticketType_price(event_name, ticket_type, ticket_price):
 
     product_id = get_product(event_name)
         
@@ -379,7 +380,7 @@ def get_ticketType_price(event_name, ticket_type):
     else:
         print(f"No Price with metadata name '{ticket_type}' was found")
         price = stripe.Price.create(
-            unit_amount=1000,
+            unit_amount=ticket_price*100,
             currency='eur',
             product = product_id,
             metadata={
@@ -391,7 +392,7 @@ def get_ticketType_price(event_name, ticket_type):
 
 def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
     
-    price = get_ticketType_price(event_name,ticket_type)
+    price = get_ticketType_price(event_name,ticket_type, ticket_price)
     
     session = stripe.checkout.Session.create(
         payment_method_types=['card'],
