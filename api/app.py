@@ -31,6 +31,15 @@ scheduler = BackgroundScheduler()
 
 scheduler.start()
 
+@scheduler.scheduled_job('interval', minutes=15)
+def is_key_expired():
+    global key, key_expiration
+
+    if datetime.datetime.now() >= key_expiration:   
+        key = secrets.token_hex(32)
+        key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
+        print('Key expired. New key generated.')
+        
 @app.before_first_request
 def setup():
     create_tables()
@@ -41,7 +50,6 @@ def book_ticket():
 
     try:
         booking_data = request.get_json()
-        print(booking_data)
         required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
@@ -61,13 +69,13 @@ def book_ticket():
         mysql.connection.rollback()
         return jsonify({"message": f"Error booking ticket: {e}"}), 500
 
-@app.route("/cancel", methods=["GET"])
+@app.route("/ticket/cancel", methods=["GET"])
 def cancel():
     return jsonify({
         "message": "Payment was canceled by the user."
     }), 200
 
-@app.route("/success", methods=["GET"])
+@app.route("/ticket//success", methods=["GET"])
 def success():
     try:
         
@@ -133,13 +141,35 @@ def unbook_ticket(ticket_id):
 
             if booking is None:
                 return jsonify({"message": "Ticket not found"}), 404
+            
+            query = "SELECT payment_intent FROM transactions WHERE ticket_id=%s AND user_id=%s"
+            cur.execute(query, (ticket_id, user_id))
+            result = cur.fetchone()
 
-            query = "DELETE FROM ticket WHERE ticket_id=%s"
-            cur.execute(query, (ticket_id,))
-            mysql.connection.commit()
+            if result:
+                payment_intent_id = result[0]
+  
+            else:
+                return jsonify({"message": 'No payment_intent found for ticket_id {} and user_id {}'.format(ticket_id, user_id)}), 404
 
-            return jsonify({"message": "Ticket unbooked"})
+            refund = stripe.Refund.create(
+                        payment_intent=payment_intent_id,
+                    )
+            
+            if refund.status == 'succeeded':
 
+                query = "DELETE FROM ticket WHERE ticket_id=%s"
+                cur.execute(query, (ticket_id,))
+                mysql.connection.commit()
+                
+                query = "DELETE FROM transactions WHERE ticket_id=%s AND user_id=%s"
+                cur.execute(query, (ticket_id, user_id))
+                mysql.connection.commit()
+
+                return jsonify({"message": "Ticket unbooked"})
+            else:
+                return jsonify({"message": 'Refund failed or pending'}), 400
+ 
     except Exception as e:
         mysql.connection.rollback()
         return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
@@ -305,15 +335,6 @@ def complete_trade(ticket_id, token):
         mysql.connection.rollback()
         return jsonify({'message': f'Error completing the ticket sale: {e}'}), 500
 
-@scheduler.scheduled_job('interval', minutes=15)
-def is_key_expired():
-    global key, key_expiration
-
-    if datetime.datetime.now() >= key_expiration:   
-        key = secrets.token_hex(32)
-        key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
-        print('Key expired. New key generated.')
-
 def create_tables():
     
     with mysql.connection.cursor() as cur:
@@ -353,12 +374,10 @@ def get_product(event_name):
     product_id = None
     for product in stripe.Product.list():
         if product.name == event_name:
-            print("Product Exists")
             product_id = product.id
             break
 
     if product_id is None:
-        print("Product Not Found")
         product = stripe.Product.create(name=event_name)
         product_id = product.id
 
@@ -376,9 +395,7 @@ def get_ticketType_price(event_name, ticket_type, ticket_price):
 
     if matching_prices:
         price = matching_prices[0]
-        print(f"Price with metadata name '{ticket_type}' already exists!")
     else:
-        print(f"No Price with metadata name '{ticket_type}' was found")
         price = stripe.Price.create(
             unit_amount=ticket_price*100,
             currency='eur',
@@ -407,8 +424,8 @@ def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
             "user_id": user_id,
         },
         mode='payment',
-        success_url=request.url_root + "success?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url=request.url_root + "cancel",
+        success_url = request.url_root + "ticket/success?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url = request.url_root + "ticket/cancel",
     )
     return session
 
