@@ -1,11 +1,12 @@
 from flask import Flask, jsonify, request, url_for, redirect
 from flask_mysqldb import MySQL
+from apscheduler.schedulers.background import BackgroundScheduler
 import yaml
 import datetime
 import jwt
 import secrets
 import stripe
-from apscheduler.schedulers.background import BackgroundScheduler
+
 
 app = Flask(__name__)
 
@@ -63,7 +64,10 @@ def book_ticket():
 
         session = create_session(event_name, ticket_type, event_id,ticket_price,user_id)
         
-        return redirect(session.url, code=303)  
+        return jsonify({
+            "session_url": session.url,
+            "session_id": session.id
+        }), 200
               
     except Exception as e:
         mysql.connection.rollback()
@@ -75,7 +79,7 @@ def cancel():
         "message": "Payment was canceled by the user."
     }), 200
 
-@app.route("/ticket//success", methods=["GET"])
+@app.route("/ticket/success", methods=["GET"])
 def success():
     try:
         
