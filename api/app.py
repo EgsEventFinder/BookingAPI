@@ -54,7 +54,7 @@ def book_ticket():
         required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
-                raise Exception(f"{field} is missing")
+                return jsonify({"message": f"{field} is missing"}), 400
         
         user_id = booking_data["user_id"]
         event_id = booking_data["event_id"]
@@ -68,10 +68,9 @@ def book_ticket():
             "session_url": session.url,
             "session_id": session.id
         }), 200
-              
+    
     except Exception as e:
-        mysql.connection.rollback()
-        return jsonify({"message": f"Error booking ticket: {e}"}), 400
+        return jsonify({"message": f"Error booking ticket: {e}"}), 500
 
 @app.route("/ticket/cancel", methods=["GET"])
 def cancel():
@@ -135,7 +134,7 @@ def unbook_ticket(ticket_id):
         booking_data = request.get_json()
 
         if "user_id" not in booking_data:
-            raise Exception("User ID is missing")
+            raise ValueError("User ID is missing")
 
         user_id = booking_data["user_id"]
 
@@ -152,17 +151,19 @@ def unbook_ticket(ticket_id):
             mysql.connection.commit()
 
             return jsonify({"message": "Ticket unbooked"})
- 
+    except ValueError as e:
+        return jsonify({"message": f"Invalid query parameter: {e}"}), 400
+    
     except Exception as e:
         mysql.connection.rollback()
-        return jsonify({"message": f"Error unbooking ticket: {e}"}), 400
+        return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
 
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def get_ticket(ticket_id):
     try:
         user_id = request.args.get("user_id", type=int)
         if user_id is None:
-            raise Exception("User ID is missing")
+            raise ValueError("User ID is missing")
         
         with mysql.connection.cursor() as cur:
             query = """
@@ -183,9 +184,12 @@ def get_ticket(ticket_id):
                 "type": ticket_type,
                 "booking_date": format_date(booking_date)
             })
-
+        
+    except ValueError as e:
+        return jsonify({"message": f"Invalid query parameter: {e}"}), 400
+    
     except Exception as e:
-        return jsonify({"message": f"Error getting user ticket: {e}"}), 400
+        return jsonify({"message": f"Error getting user ticket: {e}"}), 500
 
 @app.route("/ticket/user/tickets", methods=["GET"])
 def get_tickets():
@@ -194,7 +198,7 @@ def get_tickets():
         user_id = request.args.get("user_id", type=int)
 
         if user_id is None:
-            raise Exception("User ID is missing")
+            raise ValueError("User ID is missing")
         
         page = request.args.get("page",1, type=int)
         limit = request.args.get("limit",10, type=int)
@@ -229,9 +233,11 @@ def get_tickets():
             return jsonify({
                 "tickets": formatted_tickets
             })
-
+    except ValueError as e:
+        return jsonify({"message": f"Invalid query parameter: {e}"}), 400
+    
     except Exception as e:
-        return jsonify({"message": f"Error getting user tickets: {e}"}), 400
+        return jsonify({"message": f"Error getting user tickets: {e}"}), 500
 
 @app.route('/ticket/<ticket_id>/trade', methods=['GET'])
 def trade_ticket(ticket_id):
@@ -243,7 +249,7 @@ def trade_ticket(ticket_id):
         buyer_email = request.args.get("buyer_email", type=str)
 
         if seller_id is None or seller_email is None or buyer_id is None or buyer_email is None:
-            raise Exception("One or more parameters are missing from the query.")
+            raise ValueError("One or more parameters are missing from the query.")
  
         with mysql.connection.cursor() as cur:
             query = """
@@ -286,9 +292,11 @@ def trade_ticket(ticket_id):
                 'buyer_id': buyer_id,
                 'buyer_email': buyer_email,
             })
-        
+    except ValueError as e:
+        return jsonify({"message": f"Invalid query parameter: {e}"}), 400
+    
     except Exception as e:
-        return jsonify({"message": "Error trading the tickets: {e}"}), 400
+        return jsonify({"message": "Error trading the tickets: {e}"}), 500
 
 @app.route('/ticket/<ticket_id>/complete_trade/<token>', methods=['GET'])
 def complete_trade(ticket_id, token):
@@ -322,7 +330,7 @@ def complete_trade(ticket_id, token):
 
     except Exception as e:
         mysql.connection.rollback()
-        return jsonify({'message': f'Error completing the ticket sale: {e}'}), 400
+        return jsonify({'message': f'Error completing the ticket sale: {e}'}), 500
 
 def create_tables():
     
@@ -342,7 +350,7 @@ def create_tables():
            
         except Exception as e:
             mysql.connection.rollback()
-            return jsonify({"message": f"Error creating tables: {e}"}), 400
+            return jsonify({"message": f"Error creating tables: {e}"}), 500
 
 
 def format_date(date):
@@ -352,10 +360,12 @@ def get_product(event_name):
     product_id = None
     for product in stripe.Product.list():
         if product.name == event_name:
+            print("Product Exists!!")
             product_id = product.id
             break
 
     if product_id is None:
+        print("Product do not exist!!!")
         product = stripe.Product.create(name=event_name)
         product_id = product.id
 
@@ -372,8 +382,10 @@ def get_ticketType_price(event_name, ticket_type, ticket_price):
     matching_prices = [price for price in prices if price.metadata.get('name') == ticket_type]
 
     if matching_prices:
+        print("Type exists!!!")
         price = matching_prices[0]
     else:
+        print("Type do not exists!!!")
         price = stripe.Price.create(
             unit_amount=ticket_price*100,
             currency='eur',
