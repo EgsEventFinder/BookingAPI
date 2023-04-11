@@ -51,6 +51,7 @@ def book_ticket():
 
     try:
         booking_data = request.get_json()
+        print("Booking data -> ", booking_data)
         required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
@@ -88,7 +89,7 @@ def success():
         
         elif request.method == "POST":
 
-            session_id = request.get_json()['session_id']
+            session_id = request.args.get("session_id")
             session = stripe.checkout.Session.retrieve(session_id)
 
             payment_intent_id = session.payment_intent
@@ -417,6 +418,7 @@ def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
         success_url = request.url_root + "ticket/success?session_id={CHECKOUT_SESSION_ID}",
         cancel_url = request.url_root + "ticket/cancel",
     )
+    print("Session -> ", session)
     return session
 
 if __name__ == '__main__':
