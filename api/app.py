@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, url_for, redirect
+from flask import Flask, jsonify, request, url_for
 from flask_mysqldb import MySQL
 from apscheduler.schedulers.background import BackgroundScheduler
 import yaml
@@ -54,7 +54,7 @@ def book_ticket():
         required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
-                return jsonify({"message": f"{field} is missing"}), 400
+                raise Exception(f"{field} is missing")
         
         user_id = booking_data["user_id"]
         event_id = booking_data["event_id"]
@@ -62,7 +62,7 @@ def book_ticket():
         ticket_type = booking_data["ticket_type"]
         event_name = booking_data["event_name"]
 
-        session = create_session(event_name, ticket_type, event_id,ticket_price,user_id)
+        session = create_session(event_name, ticket_type, event_id, ticket_price, user_id)
         
         return jsonify({
             "session_url": session.url,
@@ -71,7 +71,7 @@ def book_ticket():
               
     except Exception as e:
         mysql.connection.rollback()
-        return jsonify({"message": f"Error booking ticket: {e}"}), 500
+        return jsonify({"message": f"Error booking ticket: {e}"}), 400
 
 @app.route("/ticket/cancel", methods=["GET"])
 def cancel():
@@ -79,50 +79,51 @@ def cancel():
         "message": "Payment was canceled by the user."
     }), 200
 
-@app.route("/ticket/success", methods=["GET"])
+@app.route("/ticket/success", methods=["GET", "POST"])
 def success():
     try:
+        if request.method == "GET":
+            session_id = request.args.get("session_id")
+
+            return jsonify({"message": "Payment was successful"})
         
-        session_id = request.args.get("session_id")
-        session = stripe.checkout.Session.retrieve(session_id)
+        elif request.method == "POST":
 
-        payment_intent_id = session.payment_intent
-        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            session_id = request.get_json()['session_id']
+            session = stripe.checkout.Session.retrieve(session_id)
 
-        event_id = session.metadata.get("event_id")
-        ticket_price = session.metadata.get("ticket_price")
-        ticket_type = session.metadata.get("ticket_type")
-        user_id = session.metadata.get("user_id")
-        booking_date = datetime.datetime.now()
+            payment_intent_id = session.payment_intent
+            payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
 
-        if payment_intent.status == "succeeded":    
-            with mysql.connection.cursor() as cur:
-                query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
-                cur.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
-                mysql.connection.commit()
+            event_id = session.metadata.get("event_id")
+            ticket_price = session.metadata.get("ticket_price")
+            ticket_type = session.metadata.get("ticket_type")
+            user_id = session.metadata.get("user_id")
+            booking_date = datetime.datetime.now()
 
-                ticket_id = cur.lastrowid
-                
-                query = """INSERT INTO transactions (event_id, user_id, ticket_id, payment_intent) 
-                            VALUES (%s,%s,%s,%s);
-                        """
-                cur.execute(query, (event_id, user_id, ticket_id, payment_intent.id,))
-                mysql.connection.commit()
+            if payment_intent.status == "succeeded":    
 
-            return jsonify({
-                "message": "Ticket booked",
-                "ticket_id": ticket_id,
-                "user_id": user_id,
-                "event_id": event_id,
-                "price": ticket_price,
-                "type": ticket_type,
-                "booking_date": format_date(booking_date)
-            }),200
+                with mysql.connection.cursor() as cur:
+                    query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
+                    cur.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
+                    mysql.connection.commit()
+
+                    ticket_id = cur.lastrowid
+            
+                return jsonify({
+                    "message": "Ticket booked",
+                    "ticket_id": ticket_id,
+                    "user_id": user_id,
+                    "event_id": event_id,
+                    "price": ticket_price,
+                    "type": ticket_type,
+                    "booking_date": format_date(booking_date)
+                }),200
         
-        else:
-            return jsonify({
-                "message": "Payment failed.",
-            }), 400
+            else:
+                return jsonify({
+                    "message": "Payment failed.",
+                }), 402
         
     except Exception as e:
         mysql.connection.rollback()
@@ -134,7 +135,7 @@ def unbook_ticket(ticket_id):
         booking_data = request.get_json()
 
         if "user_id" not in booking_data:
-            return jsonify({"message": "User ID is missing"}), 400
+            raise Exception("User ID is missing")
 
         user_id = booking_data["user_id"]
 
@@ -146,71 +147,57 @@ def unbook_ticket(ticket_id):
             if booking is None:
                 return jsonify({"message": "Ticket not found"}), 404
             
-            query = "SELECT payment_intent FROM transactions WHERE ticket_id=%s AND user_id=%s"
-            cur.execute(query, (ticket_id, user_id))
-            result = cur.fetchone()
+            query = "DELETE FROM ticket WHERE ticket_id=%s"
+            cur.execute(query, (ticket_id,))
+            mysql.connection.commit()
 
-            if result:
-                payment_intent_id = result[0]
-  
-            else:
-                return jsonify({"message": 'No payment_intent found for ticket_id {} and user_id {}'.format(ticket_id, user_id)}), 404
-
-            refund = stripe.Refund.create(
-                        payment_intent=payment_intent_id,
-                    )
-            
-            if refund.status == 'succeeded':
-
-                query = "DELETE FROM ticket WHERE ticket_id=%s"
-                cur.execute(query, (ticket_id,))
-                mysql.connection.commit()
-                
-                query = "DELETE FROM transactions WHERE ticket_id=%s AND user_id=%s"
-                cur.execute(query, (ticket_id, user_id))
-                mysql.connection.commit()
-
-                return jsonify({"message": "Ticket unbooked"})
-            else:
-                return jsonify({"message": 'Refund failed or pending'}), 400
+            return jsonify({"message": "Ticket unbooked"})
  
     except Exception as e:
         mysql.connection.rollback()
-        return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
+        return jsonify({"message": f"Error unbooking ticket: {e}"}), 400
 
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def get_ticket(ticket_id):
-    
-    user_id = request.args.get("user_id")
-
-    with mysql.connection.cursor() as cur:
-        query = """
-            SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s LIMIT 1
-        """
-        cur.execute(query, (ticket_id, user_id))
-
-        ticket = cur.fetchone()
-
-        if ticket is None:
-            return jsonify({"message": "Ticket not found"}), 404
-
-        event_id, price, ticket_type, booking_date = ticket
-   
-        return jsonify({
-            "event_id": event_id,
-            "price": price,
-            "type": ticket_type,
-            "booking_date": format_date(booking_date)
-        })
+    try:
+        user_id = request.args.get("user_id", type=int)
+        if user_id is None:
+            raise Exception("User ID is missing")
         
+        with mysql.connection.cursor() as cur:
+            query = """
+                SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s LIMIT 1
+            """
+            cur.execute(query, (ticket_id, user_id))
+
+            ticket = cur.fetchone()
+
+            if ticket is None:
+                return jsonify({"message": "Ticket not found"}), 404
+
+            event_id, price, ticket_type, booking_date = ticket
+    
+            return jsonify({
+                "event_id": event_id,
+                "price": price,
+                "type": ticket_type,
+                "booking_date": format_date(booking_date)
+            })
+
+    except Exception as e:
+        return jsonify({"message": f"Error getting user ticket: {e}"}), 400
 
 @app.route("/ticket/user/tickets", methods=["GET"])
 def get_tickets():
 
     try:
         user_id = request.args.get("user_id", type=int)
-        page = request.args.get("page", 1, type=int)
-        limit = request.args.get("limit", 10, type=int)
+
+        if user_id is None:
+            raise Exception("User ID is missing")
+        
+        page = request.args.get("page",1, type=int)
+        limit = request.args.get("limit",10, type=int)
 
         with mysql.connection.cursor() as cur:
            
@@ -243,11 +230,8 @@ def get_tickets():
                 "tickets": formatted_tickets
             })
 
-    except ValueError:
-        return jsonify({"message": "Invalid query parameter."}), 400
-
     except Exception as e:
-        return jsonify({"message": f"Error getting user tickets: {e}"}), 500
+        return jsonify({"message": f"Error getting user tickets: {e}"}), 400
 
 @app.route('/ticket/<ticket_id>/trade', methods=['GET'])
 def trade_ticket(ticket_id):
@@ -257,6 +241,9 @@ def trade_ticket(ticket_id):
         seller_email = request.args.get("seller_email", type=str)
         buyer_id = request.args.get("buyer_id", type=int)
         buyer_email = request.args.get("buyer_email", type=str)
+
+        if seller_id is None or seller_email is None or buyer_id is None or buyer_email is None:
+            raise Exception("One or more parameters are missing from the query.")
  
         with mysql.connection.cursor() as cur:
             query = """
@@ -300,10 +287,8 @@ def trade_ticket(ticket_id):
                 'buyer_email': buyer_email,
             })
         
-    except ValueError:
-        return jsonify({"message": "Invalid query parameter."}), 400
     except Exception as e:
-        return jsonify({"message": "Error trading the tickets: {e}"}), 500
+        return jsonify({"message": "Error trading the tickets: {e}"}), 400
 
 @app.route('/ticket/<ticket_id>/complete_trade/<token>', methods=['GET'])
 def complete_trade(ticket_id, token):
@@ -337,7 +322,7 @@ def complete_trade(ticket_id, token):
 
     except Exception as e:
         mysql.connection.rollback()
-        return jsonify({'message': f'Error completing the ticket sale: {e}'}), 500
+        return jsonify({'message': f'Error completing the ticket sale: {e}'}), 400
 
 def create_tables():
     
@@ -354,21 +339,10 @@ def create_tables():
             
             cur.execute(query_ticket)
             mysql.connection.commit()
-            
-            query_transactions = """CREATE TABLE IF NOT EXISTS transactions (
-                transaction_id INT AUTO_INCREMENT PRIMARY KEY,                   
-                event_id VARCHAR(50) NOT NULL,
-                user_id INT NOT NULL,
-                ticket_id INT NOT NULL,
-                payment_intent VARCHAR(256) NOT NULL
-            );"""
-            
-            cur.execute(query_transactions)
-            mysql.connection.commit()
-    
+           
         except Exception as e:
             mysql.connection.rollback()
-            return jsonify({"message": f"Error creating tables: {e}"}), 500
+            return jsonify({"message": f"Error creating tables: {e}"}), 400
 
 
 def format_date(date):
