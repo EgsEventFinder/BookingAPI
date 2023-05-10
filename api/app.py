@@ -1,29 +1,35 @@
 from flask import Flask, jsonify, request, url_for
-from flask_mysqldb import MySQL
 from apscheduler.schedulers.background import BackgroundScheduler
-import yaml
+from mysql.connector import Error
+import mysql.connector
 import datetime
 import jwt
 import secrets
 import stripe
 
-
 app = Flask(__name__)
 
-with open("db.yaml", "r") as stream:
+connection = None
+cursor = None
+
+stripe.api_key = 'sk_test_51Ms4SEJfFnVhM14S7CRqaVf45q3syOfrOnwqi0OYq5RJqVvqnkM4Inhu8nSDaQnbPtQkAU2ndnga7WoxitbmMax700aZEiF9X6'
+
+def connect_db():
+    
+    global connection, cursor
     try:
-        db = yaml.safe_load(stream)
-    except yaml.YAMLError as e:
-        print(e)
-
-app.config['MYSQL_HOST'] = db['mysql_host']
-app.config['MYSQL_USER'] = db['mysql_user']
-app.config['MYSQL_PASSWORD'] = db['mysql_password']
-app.config['MYSQL_DB'] = db['mysql_db']
-
-stripe.api_key = db['stripe_api_key']
-
-mysql = MySQL(app)
+        connection = mysql.connector.connect(host='db',port=3306, database='db_booking', user='fastmiguel099', passwd='12345')
+        if connection.is_connected():
+            db_Info = connection.get_server_info()
+            print("Connected to MySQL Server version ", db_Info)
+            cursor = connection.cursor()
+            cursor.execute("select database();")
+            record = cursor.fetchone()
+            print("You're connected to database: ", record)
+            return True
+    except Error as e:
+        print("Error while connecting to MySQL", e)
+        return False
 
 key = secrets.token_hex(32)
 key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
@@ -41,7 +47,7 @@ def is_key_expired():
         key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
         print('Key expired. New key generated.')
         
-@app.before_first_request
+@app._got_first_request
 def setup():
     create_tables()
     is_key_expired()
@@ -51,7 +57,6 @@ def book_ticket():
 
     try:
         booking_data = request.get_json()
-        print("Booking data -> ", booking_data)
         required_fields = ["user_id", "event_id", "price", "ticket_type", "event_name"]
         for field in required_fields:
             if field not in booking_data:
@@ -59,7 +64,7 @@ def book_ticket():
         
         user_id = booking_data["user_id"]
         event_id = booking_data["event_id"]
-        ticket_price = booking_data["price"]
+        ticket_price = int(booking_data["price"])
         ticket_type = booking_data["ticket_type"]
         event_name = booking_data["event_name"]
 
@@ -81,6 +86,9 @@ def cancel():
 
 @app.route("/ticket/success", methods=["GET", "POST"])
 def success():
+
+    global connection, cursor
+
     try:
         if request.method == "GET":
             session_id = request.args.get("session_id")
@@ -103,12 +111,13 @@ def success():
 
             if payment_intent.status == "succeeded":    
 
-                with mysql.connection.cursor() as cur:
-                    query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
-                    cur.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
-                    mysql.connection.commit()
+                
+                query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
+                cursor = connection.cursor()
+                cursor.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
+                connection.commit()
 
-                    ticket_id = cur.lastrowid
+                ticket_id = cursor.lastrowid
             
                 return jsonify({
                     "message": "Ticket booked",
@@ -126,11 +135,14 @@ def success():
                 }), 402
         
     except Exception as e:
-        mysql.connection.rollback()
+        connection.rollback()
         return jsonify({"message": f"Error: {e}"}), 500
 
 @app.route("/ticket/<ticket_id>", methods=["DELETE"])
 def unbook_ticket(ticket_id):
+
+    global connection, cursor
+
     try:
         booking_data = request.get_json()
 
@@ -139,52 +151,57 @@ def unbook_ticket(ticket_id):
 
         user_id = booking_data["user_id"]
 
-        with mysql.connection.cursor() as cur:
-            query = "SELECT * FROM ticket WHERE ticket_id=%s AND user_id=%s"
-            cur.execute(query, (ticket_id, user_id))
-            booking = cur.fetchone()
+        
+        query = "SELECT * FROM ticket WHERE ticket_id=%s AND user_id=%s"
+        cursor = connection.cursor()
+        cursor.execute(query, (ticket_id, user_id))
+        booking = cursor.fetchone()
 
-            if booking is None:
-                return jsonify({"message": "Ticket not found"}), 404
-            
-            query = "DELETE FROM ticket WHERE ticket_id=%s"
-            cur.execute(query, (ticket_id,))
-            mysql.connection.commit()
+        if booking is None:
+            return jsonify({"message": "Ticket not found"}), 404
+        
+        query = "DELETE FROM ticket WHERE ticket_id=%s"
+        cursor.execute(query, (ticket_id,))
+        connection.commit()
 
-            return jsonify({"message": "Ticket unbooked"})
+        return jsonify({"message": "Ticket unbooked"})
+    
     except ValueError as e:
         return jsonify({"message": f"Invalid query parameter: {e}"}), 400
     
     except Exception as e:
-        mysql.connection.rollback()
+        connection.rollback()
         return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
 
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def get_ticket(ticket_id):
+
+    global connection, cursor
+
     try:
         user_id = request.args.get("user_id", type=int)
         if user_id is None:
             raise ValueError("User ID is missing")
         
-        with mysql.connection.cursor() as cur:
-            query = """
-                SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s LIMIT 1
-            """
-            cur.execute(query, (ticket_id, user_id))
+        query = """
+            SELECT event_id, price, type, booking_date FROM ticket WHERE ticket_id = %s AND user_id = %s LIMIT 1
+        """
+        cursor = connection.cursor()
+        cursor.execute(query, (ticket_id, user_id))
 
-            ticket = cur.fetchone()
+        ticket = cursor.fetchone()
 
-            if ticket is None:
-                return jsonify({"message": "Ticket not found"}), 404
+        if ticket is None:
+            return jsonify({"message": "Ticket not found"}), 404
 
-            event_id, price, ticket_type, booking_date = ticket
-    
-            return jsonify({
-                "event_id": event_id,
-                "price": price,
-                "type": ticket_type,
-                "booking_date": format_date(booking_date)
-            })
+        event_id, price, ticket_type, booking_date = ticket
+
+        return jsonify({
+            "event_id": event_id,
+            "price": price,
+            "type": ticket_type,
+            "booking_date": format_date(booking_date)
+        })
         
     except ValueError as e:
         return jsonify({"message": f"Invalid query parameter: {e}"}), 400
@@ -195,6 +212,8 @@ def get_ticket(ticket_id):
 @app.route("/ticket/user/tickets", methods=["GET"])
 def get_tickets():
 
+    global connection, cursor
+
     try:
         user_id = request.args.get("user_id", type=int)
 
@@ -204,36 +223,37 @@ def get_tickets():
         page = request.args.get("page",1, type=int)
         limit = request.args.get("limit",10, type=int)
 
-        with mysql.connection.cursor() as cur:
+        
            
-            query = """
-                SELECT ticket_id,event_id, price, type, booking_date 
-                FROM ticket
-                WHERE user_id = %s 
-                ORDER BY booking_date DESC 
-                LIMIT %s,%s
-            """
-            cur.execute(query, (user_id, (page - 1) * limit, limit))
-            user_tickets = cur.fetchall()
+        query = """
+            SELECT ticket_id,event_id, price, type, booking_date 
+            FROM ticket
+            WHERE user_id = %s 
+            ORDER BY booking_date DESC 
+            LIMIT %s,%s
+        """
+        cursor = connection.cursor()
+        cursor.execute(query, (user_id, (page - 1) * limit, limit))
+        user_tickets = cursor.fetchall()
 
-            if not user_tickets:
-                return jsonify({"message": "No tickets found for this user ID."}), 404
+        if not user_tickets:
+            return jsonify({"message": "No tickets found for this user ID."}), 404
 
-            formatted_tickets = []
-            for ticket in user_tickets:
-                ticket_id, event_id, price, ticket_type, booking_date = ticket
-                formatted_ticket = {
-                    "ticket_id": ticket_id,
-                    "event_id": event_id,
-                    "price": price,
-                    "type": ticket_type,
-                    "booking_date": format_date(booking_date)
-                }
-                formatted_tickets.append(formatted_ticket)
+        formatted_tickets = []
+        for ticket in user_tickets:
+            ticket_id, event_id, price, ticket_type, booking_date = ticket
+            formatted_ticket = {
+                "ticket_id": ticket_id,
+                "event_id": event_id,
+                "price": price,
+                "type": ticket_type,
+                "booking_date": format_date(booking_date)
+            }
+            formatted_tickets.append(formatted_ticket)
 
-            return jsonify({
-                "tickets": formatted_tickets
-            })
+        return jsonify({
+            "tickets": formatted_tickets
+        })
     except ValueError as e:
         return jsonify({"message": f"Invalid query parameter: {e}"}), 400
     
@@ -242,6 +262,8 @@ def get_tickets():
 
 @app.route('/ticket/<ticket_id>/trade', methods=['GET'])
 def trade_ticket(ticket_id):
+
+    global connection, cursor
 
     try:
         seller_id = request.args.get("seller_id", type=int)
@@ -252,47 +274,48 @@ def trade_ticket(ticket_id):
         if seller_id is None or seller_email is None or buyer_id is None or buyer_email is None:
             raise ValueError("One or more parameters are missing from the query.")
  
-        with mysql.connection.cursor() as cur:
-            query = """
-                SELECT event_id, price, type, booking_date  FROM ticket WHERE ticket_id=%s AND user_id = %s
-            """
-            cur.execute(query, (ticket_id,seller_id,))
-            ticket = cur.fetchone()
-            if ticket is None:
-                return jsonify({'message': 'Ticket not found'}), 404
-            
-            if (key_expiration - datetime.datetime.now()) < datetime.timedelta(minutes=5):
-                token_expiration = key_expiration
-            else:
-                token_expiration = datetime.datetime.now() + datetime.timedelta(minutes=5)
-            
-            payload = {
-                'seller_id': seller_id,
-                'seller_email': seller_email,
-                'buyer_id': buyer_id,
-                'buyer_email': buyer_email,
-                'exp': token_expiration
-            }
-           
-            token = jwt.encode(payload, key , algorithm='HS256')
-      
-            trade_url = url_for('complete_trade', ticket_id=ticket_id, token=token, _external=True)
-           
-            event_id, price, ticket_type, booking_date = ticket
+        
+        query = """
+            SELECT event_id, price, type, booking_date  FROM ticket WHERE ticket_id=%s AND user_id = %s
+        """
+        cursor = connection.cursor()
+        cursor.execute(query, (ticket_id,seller_id,))
+        ticket = cursor.fetchone()
+        if ticket is None:
+            return jsonify({'message': 'Ticket not found'}), 404
+        
+        if (key_expiration - datetime.datetime.now()) < datetime.timedelta(minutes=5):
+            token_expiration = key_expiration
+        else:
+            token_expiration = datetime.datetime.now() + datetime.timedelta(minutes=5)
+        
+        payload = {
+            'seller_id': seller_id,
+            'seller_email': seller_email,
+            'buyer_id': buyer_id,
+            'buyer_email': buyer_email,
+            'exp': token_expiration
+        }
+        
+        token = jwt.encode(payload, key , algorithm='HS256')
     
-            return jsonify({
-                "url": trade_url,
-                "ticket": {
-                    "event_id": event_id,
-                    "price": price,
-                    "type": ticket_type,
-                    "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
-                },
-                'seller_id': seller_id,
-                'seller_email': seller_email,
-                'buyer_id': buyer_id,
-                'buyer_email': buyer_email,
-            })
+        trade_url = url_for('complete_trade', ticket_id=ticket_id, token=token, _external=True)
+        
+        event_id, price, ticket_type, booking_date = ticket
+
+        return jsonify({
+            "url": trade_url,
+            "ticket": {
+                "event_id": event_id,
+                "price": price,
+                "type": ticket_type,
+                "booking_date": booking_date.strftime("%Y-%m-%d %H:%M")
+            },
+            'seller_id': seller_id,
+            'seller_email': seller_email,
+            'buyer_id': buyer_id,
+            'buyer_email': buyer_email,
+        })
     except ValueError as e:
         return jsonify({"message": f"Invalid query parameter: {e}"}), 400
     
@@ -301,6 +324,8 @@ def trade_ticket(ticket_id):
 
 @app.route('/ticket/<ticket_id>/complete_trade/<token>', methods=['GET'])
 def complete_trade(ticket_id, token):
+
+    global connection, cursor
 
     try:
         decoded_token = jwt.decode(token, key, algorithms=['HS256'])
@@ -314,12 +339,13 @@ def complete_trade(ticket_id, token):
         buyer_id = decoded_token.get('buyer_id')
         trade_date = datetime.datetime.now()
 
-        with mysql.connection.cursor() as cur:
-            query = """
-                UPDATE ticket SET user_id=%s, booking_date=%s WHERE ticket_id=%s AND user_id=%s
-            """
-            cur.execute(query,(buyer_id, trade_date, ticket_id, seller_id))
-            mysql.connection.commit()
+        
+        query = """
+            UPDATE ticket SET user_id=%s, booking_date=%s WHERE ticket_id=%s AND user_id=%s
+        """
+        cursor = connection.cursor()
+        cursor.execute(query,(buyer_id, trade_date, ticket_id, seller_id))
+        connection.commit()
 
         return jsonify({'message': 'Ticket sale completed'}), 200
 
@@ -330,28 +356,29 @@ def complete_trade(ticket_id, token):
         return jsonify({'message': 'Invalid token format. Please provide a valid token.'}), 401
 
     except Exception as e:
-        mysql.connection.rollback()
+        connection.rollback()
         return jsonify({'message': f'Error completing the ticket sale: {e}'}), 500
 
 def create_tables():
     
-    with mysql.connection.cursor() as cur:
-        try:
-            query_ticket = """CREATE TABLE IF NOT EXISTS ticket (
-                ticket_id INT AUTO_INCREMENT PRIMARY KEY,                   
-                event_id VARCHAR(50) NOT NULL,
-                price INT NOT NULL,
-                type VARCHAR(50) NOT NULL,
-                user_id INT NOT NULL,
-                booking_date DATETIME DEFAULT CURRENT_TIMESTAMP
-            );"""
-            
-            cur.execute(query_ticket)
-            mysql.connection.commit()
-           
-        except Exception as e:
-            mysql.connection.rollback()
-            return jsonify({"message": f"Error creating tables: {e}"}), 500
+    global connection, cursor
+
+    try:
+        query_ticket = """CREATE TABLE IF NOT EXISTS ticket (
+            ticket_id INT AUTO_INCREMENT PRIMARY KEY,                   
+            event_id VARCHAR(50) NOT NULL,
+            price INT NOT NULL,
+            type VARCHAR(50) NOT NULL,
+            user_id INT NOT NULL,
+            booking_date DATETIME DEFAULT CURRENT_TIMESTAMP
+        );"""
+        cursor = connection.cursor()
+        cursor.execute(query_ticket)
+        connection.commit()
+        
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"message": f"Error creating tables: {e}"}), 500
 
 
 def format_date(date):
@@ -361,12 +388,10 @@ def get_product(event_name):
     product_id = None
     for product in stripe.Product.list():
         if product.name == event_name:
-            print("Product Exists!!")
             product_id = product.id
             break
 
     if product_id is None:
-        print("Product do not exist!!!")
         product = stripe.Product.create(name=event_name)
         product_id = product.id
 
@@ -383,10 +408,8 @@ def get_ticketType_price(event_name, ticket_type, ticket_price):
     matching_prices = [price for price in prices if price.metadata.get('name') == ticket_type]
 
     if matching_prices:
-        print("Type exists!!!")
         price = matching_prices[0]
     else:
-        print("Type do not exists!!!")
         price = stripe.Price.create(
             unit_amount=ticket_price*100,
             currency='eur',
@@ -418,8 +441,10 @@ def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
         success_url = request.url_root + "ticket/success?session_id={CHECKOUT_SESSION_ID}",
         cancel_url = request.url_root + "ticket/cancel",
     )
-    print("Session -> ", session)
     return session
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    
+    while not connect_db():
+        continue
+    app.run(debug = True, host='0.0.0.0')
