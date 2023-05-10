@@ -47,7 +47,6 @@ def is_key_expired():
         key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
         print('Key expired. New key generated.')
         
-@app._got_first_request
 def setup():
     create_tables()
     is_key_expired()
@@ -447,4 +446,5 @@ if __name__ == '__main__':
     
     while not connect_db():
         continue
+    setup()
     app.run(debug = True, host='0.0.0.0')
