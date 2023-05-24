@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 ENV TZ Europe/Lisbon
 
-EXPOSE 5000
+EXPOSE 8080
 
 COPY . .
 

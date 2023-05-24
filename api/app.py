@@ -18,7 +18,7 @@ def connect_db():
     
     global connection, cursor
     try:
-        connection = mysql.connector.connect(host='db',port=3306, database='db_booking', user='fastmiguel099', passwd='12345')
+        connection = mysql.connector.connect(host='booking-db',port=3306, database='db_booking', user='root', passwd='root')
         if connection.is_connected():
             db_Info = connection.get_server_info()
             print("Connected to MySQL Server version ", db_Info)
@@ -373,8 +373,7 @@ def create_tables():
         );"""
         cursor = connection.cursor()
         cursor.execute(query_ticket)
-        connection.commit()
-        
+        connection.commit() 
     except Exception as e:
         connection.rollback()
         return jsonify({"message": f"Error creating tables: {e}"}), 500
@@ -447,4 +446,4 @@ if __name__ == '__main__':
     while not connect_db():
         continue
     setup()
-    app.run(debug = True, host='0.0.0.0')
+    app.run(debug = True, host = '0.0.0.0', port = 8080)
