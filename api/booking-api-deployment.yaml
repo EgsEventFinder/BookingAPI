@@ -1,0 +1,134 @@
+# API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booking-api
+  namespace: egs-eventfinder
+  labels:
+    app: booking-api
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: booking-api
+  template:
+    metadata:
+      labels:
+        app: booking-api
+    spec:
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "1"
+      containers:
+      - name: booking-api
+        image: registry.deti:5000/egs-eventfinder/booking-api:v8
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 5002
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookingapi-service
+  namespace: egs-eventfinder
+spec:
+  ports:
+  - port: 5002
+    protocol: TCP
+    targetPort: 5002
+  selector:
+    app: booking-api
+  type: NodePort
+
+# DATABASE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booking-db
+  namespace: egs-eventfinder
+spec:
+  selector:
+    matchLabels:
+      app: booking-db
+  template:
+    metadata:
+      labels:
+        app: booking-db
+    spec:
+      containers:
+      - name: booking-db
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+          name: booking-db
+        volumeMounts:
+          - name: mysql-persistent-storage
+            mountPath: /var/lib/mysql
+        env:
+      # - name: MYSQL_ROOT_PASSWORD
+      #   valueFrom:
+      #     secretKeyRef:
+      #       name: bookingdb-secrets
+      #       key: db_password
+        - name: MYSQL_ROOT_PASSWORD
+          value: root
+      volumes:
+        - name: mysql-persistent-storage
+          persistentVolumeClaim:
+            claimName: booking-pvc-claim
+
+
+# DATABASE SERVICE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: booking-db
+  namespace: egs-eventfinder
+spec:
+  ports:
+  - port: 3306
+    protocol: TCP
+    name: booking-db
+  selector:
+    app: booking-db
+  type: NodePort
+
+# TRAEFIK
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bookingapi-k3s
+  namespace: egs-eventfinder
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/frontend-entry-points: http,https
+    traefik.ingress.kubernetes.io/redirect-entry-point: https
+    traefik.ingress.kubernetes.io/redirect-permanent: "true"
+spec:
+  rules:
+  - host: bookingapi.deti
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: bookingapi-service
+            port: 
+              number: 5002
