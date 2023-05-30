@@ -269,11 +269,9 @@ def trade_ticket(ticket_id):
         seller_email = request.args.get("seller_email", type=str)
         buyer_id = request.args.get("buyer_id", type=int)
         buyer_email = request.args.get("buyer_email", type=str)
-
         if seller_id is None or seller_email is None or buyer_id is None or buyer_email is None:
             raise ValueError("One or more parameters are missing from the query.")
  
-        
         query = """
             SELECT event_id, price, type, booking_date  FROM ticket WHERE ticket_id=%s AND user_id = %s
         """
