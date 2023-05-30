@@ -3,4 +3,4 @@ mysql-connector-python
 apscheduler
 PyJWT
 stripe
-
+flask-cors

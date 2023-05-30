@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 from mysql.connector import Error
+from flask_cors import CORS
 import mysql.connector
 import datetime
 import jwt
@@ -8,6 +9,7 @@ import secrets
 import stripe
 
 app = Flask(__name__)
+cors = CORS(app, resources={r"/*": {"origins": "http://webappfinder.deti"}})
 
 connection = None
 cursor = None
@@ -110,14 +112,13 @@ def success():
 
             if payment_intent.status == "succeeded":    
 
-                
                 query = "INSERT INTO ticket(event_id, price, type, user_id, booking_date) VALUES (%s, %s, %s, %s, %s)"
                 cursor = connection.cursor()
                 cursor.execute(query, (event_id, ticket_price, ticket_type, user_id, booking_date,))
                 connection.commit()
 
                 ticket_id = cursor.lastrowid
-            
+
                 return jsonify({
                     "message": "Ticket booked",
                     "ticket_id": ticket_id,
@@ -172,6 +173,27 @@ def unbook_ticket(ticket_id):
         connection.rollback()
         return jsonify({"message": f"Error unbooking ticket: {e}"}), 500
 
+@app.route("/ticket/event/<string:event_id>", methods=["DELETE"])
+def delete_tickets(event_id):
+
+    global connection, cursor
+    try:
+
+        query = "SELECT * FROM ticket WHERE event_id=%s"
+        cursor = connection.cursor()
+        cursor.execute(query, (event_id,))
+        tickets = cursor.fetchall()
+
+        query = "DELETE FROM ticket WHERE event_id=%s"
+        cursor.execute(query, (event_id,))
+        connection.commit()
+
+        return jsonify({"message": "Tickets deleted", "count": len(tickets)})
+    
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"message": f"Error deleting tickets: {e}"}), 500
+    
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def get_ticket(ticket_id):
 

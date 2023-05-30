@@ -27,7 +27,7 @@ spec:
           value: "1"
       containers:
       - name: booking-api
-        image: registry.deti:5000/egs-eventfinder/booking-api:v10
+        image: registry.deti:5000/egs-eventfinder/booking-api:v1
         resources:
           requests:
             memory: "32Mi"
