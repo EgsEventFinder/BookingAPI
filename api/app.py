@@ -1,26 +1,26 @@
 from flask import Flask, jsonify, request, url_for
-from apscheduler.schedulers.background import BackgroundScheduler
 from mysql.connector import Error
 from flask_cors import CORS
-import mysql.connector
-import datetime
-import jwt
-import secrets
-import stripe
+from dotenv import load_dotenv
+import mysql.connector, datetime, jwt, secrets, stripe, os
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "http://webappfinder.deti"}})
+load_dotenv()
 
 connection = None
 cursor = None
 
-stripe.api_key = 'sk_test_51Ms4SEJfFnVhM14S7CRqaVf45q3syOfrOnwqi0OYq5RJqVvqnkM4Inhu8nSDaQnbPtQkAU2ndnga7WoxitbmMax700aZEiF9X6'
-
+stripe.api_key = os.getenv('STRIPE_API_KEY')
+key = secrets.token_hex(32)
+key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
+           
 def connect_db():
     
     global connection, cursor
     try:
-        connection = mysql.connector.connect(host='booking-db',port=3306, database='db_booking', user='root', passwd='root')
+        connection = mysql.connector.connect(host='db',port=3306, database='db_booking', user='fastmiguel099', passwd='12345')
+        #connection = mysql.connector.connect(host='booking-db',port=3306, database='db_booking', user='root', passwd='root')
         if connection.is_connected():
             db_Info = connection.get_server_info()
             print("Connected to MySQL Server version ", db_Info)
@@ -28,30 +28,15 @@ def connect_db():
             cursor.execute("select database();")
             record = cursor.fetchone()
             print("You're connected to database: ", record)
+            create_tables()
             return True
     except Error as e:
         print("Error while connecting to MySQL", e)
         return False
 
-key = secrets.token_hex(32)
-key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
-    
-scheduler = BackgroundScheduler()
-
-scheduler.start()
-
-@scheduler.scheduled_job('interval', minutes=15)
-def is_key_expired():
-    global key, key_expiration
-
-    if datetime.datetime.now() >= key_expiration:   
-        key = secrets.token_hex(32)
-        key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
-        print('Key expired. New key generated.')
-        
-def setup():
-    create_tables()
-    is_key_expired()
+@app.route("/")
+def index():
+    return {"message": "Welcome To Booking_API"} 
 
 @app.route("/ticket", methods=["POST"])
 def book_ticket():
@@ -286,6 +271,8 @@ def trade_ticket(ticket_id):
 
     global connection, cursor
 
+    is_key_expired()
+
     try:
         seller_id = request.args.get("seller_id", type=int)
         seller_email = request.args.get("seller_email", type=str)
@@ -381,7 +368,7 @@ def complete_trade(ticket_id, token):
 def create_tables():
     
     global connection, cursor
-
+    print("Creating tables...")
     try:
         query_ticket = """CREATE TABLE IF NOT EXISTS ticket (
             ticket_id INT AUTO_INCREMENT PRIMARY KEY,                   
@@ -394,10 +381,20 @@ def create_tables():
         cursor = connection.cursor()
         cursor.execute(query_ticket)
         connection.commit() 
+        print("Ticket table created successfully in MySQL database")
+
     except Exception as e:
         connection.rollback()
         return jsonify({"message": f"Error creating tables: {e}"}), 500
 
+def is_key_expired():
+    global key, key_expiration
+
+    print("Checking if key is expired...")
+    if datetime.datetime.now() >= key_expiration:   
+        key = secrets.token_hex(32)
+        key_expiration = datetime.datetime.now() + datetime.timedelta(minutes=30)
+        print('Key expired. New key generated.')
 
 def format_date(date):
     return date.strftime("%Y-%m-%d %H:%M:%S")
@@ -462,8 +459,6 @@ def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
     return session
 
 if __name__ == '__main__':
-    
     while not connect_db():
         continue
-    setup()
     app.run(debug = True, host = '0.0.0.0', port = 5002)

@@ -27,7 +27,7 @@ spec:
           value: "1"
       containers:
       - name: booking-api
-        image: registry.deti:5000/egs-eventfinder/booking-api:v1
+        image: registry.deti:5000/egs-eventfinder/booking-api:v30
         resources:
           requests:
             memory: "32Mi"
@@ -79,11 +79,6 @@ spec:
           - name: mysql-persistent-storage
             mountPath: /var/lib/mysql
         env:
-      # - name: MYSQL_ROOT_PASSWORD
-      #   valueFrom:
-      #     secretKeyRef:
-      #       name: bookingdb-secrets
-      #       key: db_password
         - name: MYSQL_ROOT_PASSWORD
           value: root
       volumes:
@@ -113,7 +108,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: bookingapi-k3s
+  name: booking-api
   namespace: egs-eventfinder
   annotations:
     kubernetes.io/ingress.class: traefik
