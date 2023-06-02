@@ -19,8 +19,8 @@ def connect_db():
     
     global connection, cursor
     try:
-        connection = mysql.connector.connect(host='db',port=3306, database='db_booking', user='fastmiguel099', passwd='12345')
-        #connection = mysql.connector.connect(host='booking-db',port=3306, database='db_booking', user='root', passwd='root')
+        #connection = mysql.connector.connect(host='db',port=3306, database='db_booking', user='fastmiguel099', passwd='12345')
+        connection = mysql.connector.connect(host='booking-db',port=3306, database='db_booking', user='root', passwd='root')
         if connection.is_connected():
             db_Info = connection.get_server_info()
             print("Connected to MySQL Server version ", db_Info)
@@ -461,4 +461,4 @@ def create_session(event_name, ticket_type,event_id,ticket_price, user_id):
 if __name__ == '__main__':
     while not connect_db():
         continue
-    app.run(debug = True, host = '0.0.0.0', port = 5002)
+    app.run(debug = True, host = '0.0.0.0', port = 5010)
