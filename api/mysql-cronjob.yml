@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-cronjob
+  namespace: egs-eventfinder
+spec:
+  schedule: "*/10 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: mysql-cronjob
+            image: busybox:1.28
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Make API request
+              curl -X GET http://bookingapi.deti/ticket/user/tickets?user_id=1
+          restartPolicy: OnFailure
