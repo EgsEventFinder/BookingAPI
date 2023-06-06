@@ -1,4 +1,3 @@
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,53 +52,6 @@ spec:
     app: bookingapi
 
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: booking-db
-  namespace: egs-eventfinder
-spec:
-  selector:
-    matchLabels:
-      app: booking-db
-  template:
-    metadata:
-      labels:
-        app: booking-db
-    spec:
-      containers:
-      - name: booking-db
-        image: mysql:8.0
-        ports:
-        - containerPort: 3306
-          name: booking-db
-        volumeMounts:
-          - name: mysql-persistent-storage
-            mountPath: /var/lib/mysql
-        env:
-        - name: MYSQL_ROOT_PASSWORD
-          value: root
-      volumes:
-        - name: mysql-persistent-storage
-          persistentVolumeClaim:
-            claimName: booking-pvc-claim
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: booking-db
-  namespace: egs-eventfinder
-spec:
-  ports:
-  - port: 3306
-    protocol: TCP
-    name: booking-db
-  selector:
-    app: booking-db
-  type: NodePort
-
----
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -122,3 +74,5 @@ spec:
             name: bookingapi-service
             port: 
               number: 5010
+
+              

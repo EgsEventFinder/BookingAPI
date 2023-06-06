@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: booking-db
+  namespace: egs-eventfinder
+spec:
+  ports:
+  - port: 3306
+    protocol: TCP
+    name: booking-db
+  selector:
+    app: booking-db
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: booking-db
+  namespace: egs-eventfinder
+spec:
+  selector:
+    matchLabels:
+      app: booking-db
+  serviceName: booking-db
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: booking-db
+    spec:
+      containers:
+      - name: booking-db
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+          name: booking-db
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: root
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-persistent-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: 1Gi
